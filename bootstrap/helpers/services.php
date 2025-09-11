@@ -183,6 +183,73 @@ function updateCompose(ServiceApplication|ServiceDatabase $resource)
         return handleError($e);
     }
 }
+/**
+ * Sanitize FQDN input by removing leading/trailing commas and normalizing domains
+ */
+function sanitizeFqdn(?string $fqdn): ?string
+{
+    if (is_null($fqdn)) {
+        return null;
+    }
+
+    return str($fqdn)
+        ->replaceEnd(',', '')
+        ->trim()
+        ->replaceStart(',', '')
+        ->trim()
+        ->explode(',')
+        ->map(function ($domain) {
+            return str($domain)->trim()->lower();
+        })
+        ->unique()
+        ->implode(',');
+}
+
+/**
+ * Configure service applications with provided data
+ */
+function configureServiceApplications(Service $service, array $applicationsData): void
+{
+    if (empty($applicationsData)) {
+        return;
+    }
+
+    $allowedAppFields = ['fqdn', 'human_name', 'description', 'required_fqdn'];
+
+    foreach ($applicationsData as $appData) {
+        if (! isset($appData['uuid'])) {
+            continue;
+        }
+
+        $application = $service->applications()->where('uuid', $appData['uuid'])->first();
+        if (! $application) {
+            continue;
+        }
+
+        $updated = false;
+
+        foreach ($appData as $key => $value) {
+            if (! in_array($key, $allowedAppFields) || $key === 'uuid') {
+                continue;
+            }
+
+            if ($key === 'fqdn' && ! is_null($value)) {
+                $value = sanitizeFqdn($value);
+            }
+
+            if ($application->{$key} !== $value) {
+                $application->{$key} = $value;
+                $updated = true;
+            }
+        }
+
+        if ($updated) {
+            $application->save();
+            updateCompose($application);
+        }
+    }
+}
+
 function serviceKeys()
 {
     return get_service_templates()->keys();

@@ -6795,6 +6795,35 @@
                                     "docker_compose_raw": {
                                         "type": "string",
                                         "description": "The Docker Compose raw content."
+                                    },
+                                    "applications": {
+                                        "description": "Service applications to update during creation",
+                                        "type": "array",
+                                        "items": {
+                                            "properties": {
+                                                "uuid": {
+                                                    "description": "Application UUID",
+                                                    "type": "string"
+                                                },
+                                                "fqdn": {
+                                                    "description": "Application FQDN",
+                                                    "type": "string"
+                                                },
+                                                "human_name": {
+                                                    "description": "Human-readable name",
+                                                    "type": "string"
+                                                },
+                                                "description": {
+                                                    "description": "Application description",
+                                                    "type": "string"
+                                                },
+                                                "required_fqdn": {
+                                                    "description": "Whether FQDN is required",
+                                                    "type": "boolean"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
                                     }
                                 },
                                 "type": "object"

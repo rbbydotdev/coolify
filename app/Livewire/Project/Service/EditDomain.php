@@ -38,14 +38,11 @@ class EditDomain extends Component
     public function submit()
     {
         try {
-            $this->application->fqdn = str($this->application->fqdn)->replaceEnd(',', '')->trim();
-            $this->application->fqdn = str($this->application->fqdn)->replaceStart(',', '')->trim();
-            $this->application->fqdn = str($this->application->fqdn)->trim()->explode(',')->map(function ($domain) {
+            $this->application->fqdn = str(sanitizeFqdn($this->application->fqdn))->explode(',')->map(function ($domain) {
                 Url::fromString($domain, ['http', 'https']);
 
                 return str($domain)->trim()->lower();
-            });
-            $this->application->fqdn = $this->application->fqdn->unique()->implode(',');
+            })->unique()->implode(',');
             $warning = sslipDomainWarning($this->application->fqdn);
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));

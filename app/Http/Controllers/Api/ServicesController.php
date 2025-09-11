@@ -206,6 +206,21 @@ class ServicesController extends Controller
                         'destination_uuid' => ['type' => 'string', 'description' => 'Destination UUID. Required if server has multiple destinations.'],
                         'instant_deploy' => ['type' => 'boolean', 'default' => false, 'description' => 'Start the service immediately after creation.'],
                         'docker_compose_raw' => ['type' => 'string', 'description' => 'The Docker Compose raw content.'],
+                        'applications' => new OA\Property(
+                            property: 'applications',
+                            description: 'Service applications to update during creation',
+                            type: 'array',
+                            items: new OA\Items(
+                                type: 'object',
+                                properties: [
+                                    'uuid' => new OA\Property(property: 'uuid', description: 'Application UUID', type: 'string'),
+                                    'fqdn' => new OA\Property(property: 'fqdn', description: 'Application FQDN', type: 'string'),
+                                    'human_name' => new OA\Property(property: 'human_name', description: 'Human-readable name', type: 'string'),
+                                    'description' => new OA\Property(property: 'description', description: 'Application description', type: 'string'),
+                                    'required_fqdn' => new OA\Property(property: 'required_fqdn', description: 'Whether FQDN is required', type: 'boolean'),
+                                ]
+                            )
+                        ),
                     ],
                 ),
             ),
@@ -239,7 +254,7 @@ class ServicesController extends Controller
     )]
     public function create_service(Request $request)
     {
-        $allowedFields = ['type', 'name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw'];
+        $allowedFields = ['type', 'name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'applications'];
 
         $teamId = getTeamIdFromToken();
         if (is_null($teamId)) {
@@ -263,6 +278,11 @@ class ServicesController extends Controller
             'name' => 'string|max:255',
             'description' => 'string|nullable',
             'instant_deploy' => 'boolean',
+            'applications.*.uuid' => 'string',
+            'applications.*.fqdn' => 'nullable|string',
+            'applications.*.human_name' => 'nullable|string',
+            'applications.*.description' => 'nullable|string',
+            'applications.*.required_fqdn' => 'boolean',
         ]);
 
         $extraFields = array_diff(array_keys($request->all()), $allowedFields);
@@ -359,6 +379,10 @@ class ServicesController extends Controller
                     });
                 }
                 $service->parse(isNew: true);
+
+                // Configure applications if provided
+                configureServiceApplications($service, $request->get('applications', []));
+
                 if ($instantDeploy) {
                     StartService::dispatch($service);
                 }
@@ -379,7 +403,7 @@ class ServicesController extends Controller
 
             return response()->json(['message' => 'Service not found.', 'valid_service_types' => $serviceKeys], 404);
         } elseif (filled($request->docker_compose_raw)) {
-            $allowedFields = ['name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network'];
+            $allowedFields = ['name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'applications'];
 
             $validator = customApiValidator($request->all(), [
                 'project_uuid' => 'string|required',
@@ -392,6 +416,11 @@ class ServicesController extends Controller
                 'instant_deploy' => 'boolean',
                 'connect_to_docker_network' => 'boolean',
                 'docker_compose_raw' => 'string|required',
+                'applications.*.uuid' => 'string',
+                'applications.*.fqdn' => 'nullable|string',
+                'applications.*.human_name' => 'nullable|string',
+                'applications.*.description' => 'nullable|string',
+                'applications.*.required_fqdn' => 'boolean',
             ]);
 
             $extraFields = array_diff(array_keys($request->all()), $allowedFields);
@@ -474,6 +503,10 @@ class ServicesController extends Controller
             $service->save();
 
             $service->parse(isNew: true);
+
+            // Configure applications if provided
+            configureServiceApplications($service, $request->get('applications', []));
+
             if ($instantDeploy) {
                 StartService::dispatch($service);
             }

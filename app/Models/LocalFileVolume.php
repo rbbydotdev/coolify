@@ -3,13 +3,23 @@
 namespace App\Models;
 
 use App\Events\FileStorageChanged;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class LocalFileVolume extends BaseModel
 {
+    protected $casts = [
+        // 'fs_path' => 'encrypted',
+        // 'mount_path' => 'encrypted',
+        'content' => 'encrypted',
+        'is_directory' => 'boolean',
+    ];
+
     use HasFactory;
 
     protected $guarded = [];
+
+    public $appends = ['is_binary'];
 
     protected static function booted()
     {
@@ -17,6 +27,15 @@ class LocalFileVolume extends BaseModel
             $fileVolume->load(['service']);
             dispatch(new \App\Jobs\ServerStorageSaveJob($fileVolume));
         });
+    }
+
+    protected function isBinary(): Attribute
+    {
+        return Attribute::make(
+            get: function () {
+                return $this->content === '[binary file]';
+            }
+        );
     }
 
     public function service()
@@ -44,6 +63,10 @@ class LocalFileVolume extends BaseModel
         $isFile = instant_remote_process(["test -f $path && echo OK || echo NOK"], $server);
         if ($isFile === 'OK') {
             $content = instant_remote_process(["cat $path"], $server, false);
+            // Check if content contains binary data by looking for null bytes or non-printable characters
+            if (str_contains($content, "\0") || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $content)) {
+                $content = '[binary file]';
+            }
             $this->content = $content;
             $this->is_directory = false;
             $this->save();
@@ -96,6 +119,7 @@ class LocalFileVolume extends BaseModel
         $commands = collect([]);
         if ($this->is_directory) {
             $commands->push("mkdir -p $this->fs_path > /dev/null 2>&1 || true");
+            $commands->push("mkdir -p $workdir > /dev/null 2>&1 || true");
             $commands->push("cd $workdir");
         }
         if (str($this->fs_path)->startsWith('.') || str($this->fs_path)->startsWith('/') || str($this->fs_path)->startsWith('~')) {
@@ -135,8 +159,7 @@ class LocalFileVolume extends BaseModel
             $chmod = data_get($this, 'chmod');
             $chown = data_get($this, 'chown');
             if ($content) {
-                $content = base64_encode($content);
-                $commands->push("echo '$content' | base64 -d | tee $path > /dev/null");
+                transfer_file_to_server($content, $path, $server);
             } else {
                 $commands->push("touch $path");
             }
@@ -151,6 +174,23 @@ class LocalFileVolume extends BaseModel
             $commands->push("mkdir -p $path > /dev/null 2>&1 || true");
         }
 
-        return instant_remote_process($commands, $server);
+        if ($commands->count() > 0) {
+            return instant_remote_process($commands, $server);
+        }
+    }
+
+    // Accessor for convenient access
+    protected function plainMountPath(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->mount_path,
+            set: fn ($value) => $this->mount_path = $value
+        );
+    }
+
+    // Scope for searching
+    public function scopeWherePlainMountPath($query, $path)
+    {
+        return $query->get()->where('plain_mount_path', $path);
     }
 }

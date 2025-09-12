@@ -20,6 +20,7 @@ class Index extends Component
         $this->private_keys = PrivateKey::ownedByCurrentTeam()->get();
         $this->projects = Project::ownedByCurrentTeam()->get()->map(function ($project) {
             $project->settingsRoute = route('project.edit', ['project_uuid' => $project->uuid]);
+            $project->canUpdate = auth()->user()->can('update', $project);
 
             return $project;
         });
@@ -35,6 +36,6 @@ class Index extends Component
     {
         $project = collect($this->projects)->firstWhere('uuid', $projectUuid);
 
-        return $this->redirect($project->navigateTo(), true);
+        return $this->redirect($project->navigateTo(), navigate: false);
     }
 }

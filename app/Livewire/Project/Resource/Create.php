@@ -15,6 +15,7 @@ class Create extends Component
 
     public function mount()
     {
+
         $type = str(request()->query('type'));
         $destination_uuid = request()->query('destination');
         $server_id = request()->query('server_id');
@@ -73,7 +74,6 @@ class Create extends Component
                 if ($oneClickService) {
                     $destination = StandaloneDocker::whereUuid($destination_uuid)->first();
                     $service_payload = [
-                        'name' => "$oneClickServiceName-".str()->random(10),
                         'docker_compose_raw' => base64_decode($oneClickService),
                         'environment_id' => $environment->id,
                         'service_type' => $oneClickServiceName,

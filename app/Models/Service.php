@@ -2,15 +2,16 @@
 
 namespace App\Models;
 
+use App\Enums\ProcessStatus;
+use App\Traits\HasSafeStringAttribute;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Process\InvokedProcess;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use OpenApi\Attributes as OA;
+use Spatie\Activitylog\Models\Activity;
 use Spatie\Url\Url;
 use Visus\Cuid2\Cuid2;
 
@@ -40,9 +41,9 @@ use Visus\Cuid2\Cuid2;
 )]
 class Service extends BaseModel
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, HasSafeStringAttribute, SoftDeletes;
 
-    private static $parserVersion = '4';
+    private static $parserVersion = '5';
 
     protected $guarded = [];
 
@@ -50,6 +51,11 @@ class Service extends BaseModel
 
     protected static function booted()
     {
+        static::creating(function ($service) {
+            if (blank($service->name)) {
+                $service->name = 'service-'.(new Cuid2);
+            }
+        });
         static::created(function ($service) {
             $service->compose_parsing_version = self::$parserVersion;
             $service->save();
@@ -113,6 +119,18 @@ class Service extends BaseModel
         return (bool) str($this->status)->contains('exited');
     }
 
+    public function isStarting(): bool
+    {
+        try {
+            $activity = Activity::where('properties->type_uuid', $this->uuid)->latest()->first();
+            $status = data_get($activity, 'properties.status');
+
+            return $status === ProcessStatus::QUEUED->value || $status === ProcessStatus::IN_PROGRESS->value;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function type()
     {
         return 'service';
@@ -138,66 +156,7 @@ class Service extends BaseModel
         return Service::whereRelation('environment.project.team', 'id', currentTeam()->id)->orderBy('name');
     }
 
-    public function getContainersToStop(): array
-    {
-        $containersToStop = [];
-        $applications = $this->applications()->get();
-        foreach ($applications as $application) {
-            $containersToStop[] = "{$application->name}-{$this->uuid}";
-        }
-        $dbs = $this->databases()->get();
-        foreach ($dbs as $db) {
-            $containersToStop[] = "{$db->name}-{$this->uuid}";
-        }
-
-        return $containersToStop;
-    }
-
-    public function stopContainers(array $containerNames, $server, int $timeout = 300)
-    {
-        $processes = [];
-        foreach ($containerNames as $containerName) {
-            $processes[$containerName] = $this->stopContainer($containerName, $timeout);
-        }
-
-        $startTime = time();
-        while (count($processes) > 0) {
-            $finishedProcesses = array_filter($processes, function ($process) {
-                return ! $process->running();
-            });
-            foreach (array_keys($finishedProcesses) as $containerName) {
-                unset($processes[$containerName]);
-                $this->removeContainer($containerName, $server);
-            }
-
-            if (time() - $startTime >= $timeout) {
-                $this->forceStopRemainingContainers(array_keys($processes), $server);
-                break;
-            }
-
-            usleep(100000);
-        }
-    }
-
-    public function stopContainer(string $containerName, int $timeout): InvokedProcess
-    {
-        return Process::timeout($timeout)->start("docker stop --time=$timeout $containerName");
-    }
-
-    public function removeContainer(string $containerName, $server)
-    {
-        instant_remote_process(command: ["docker rm -f $containerName"], server: $server, throwError: false);
-    }
-
-    public function forceStopRemainingContainers(array $containerNames, $server)
-    {
-        foreach ($containerNames as $containerName) {
-            instant_remote_process(command: ["docker kill $containerName"], server: $server, throwError: false);
-            $this->removeContainer($containerName, $server);
-        }
-    }
-
-    public function delete_configurations()
+    public function deleteConfigurations()
     {
         $server = data_get($this, 'destination.server');
         $workdir = $this->workdir();
@@ -206,15 +165,19 @@ class Service extends BaseModel
         }
     }
 
-    public function delete_connected_networks($uuid)
+    public function deleteConnectedNetworks()
     {
         $server = data_get($this, 'destination.server');
-        instant_remote_process(["docker network disconnect {$uuid} coolify-proxy"], $server, false);
-        instant_remote_process(["docker network rm {$uuid}"], $server, false);
+        instant_remote_process(["docker network disconnect {$this->uuid} coolify-proxy"], $server, false);
+        instant_remote_process(["docker network rm {$this->uuid}"], $server, false);
     }
 
     public function getStatusAttribute()
     {
+        if ($this->isStarting()) {
+            return 'starting:unhealthy';
+        }
+
         $applications = $this->applications;
         $databases = $this->databases;
 
@@ -293,6 +256,19 @@ class Service extends BaseModel
                 continue;
             }
             switch ($image) {
+                case $image->contains('drizzle-team/gateway'):
+                    $data = collect([]);
+                    $masterpass = $this->environment_variables()->where('key', 'SERVICE_PASSWORD_DRIZZLE')->first();
+                    $data = $data->merge([
+                        'Master Password' => [
+                            'key' => data_get($masterpass, 'key'),
+                            'value' => data_get($masterpass, 'value'),
+                            'rules' => 'required',
+                            'isPassword' => true,
+                        ],
+                    ]);
+                    $fields->put('Drizzle', $data->toArray());
+                    break;
                 case $image->contains('castopod'):
                     $data = collect([]);
                     $disable_https = $this->environment_variables()->where('key', 'CP_DISABLE_HTTPS')->first();
@@ -1298,33 +1274,26 @@ class Service extends BaseModel
 
             return 3;
         });
+        $envs = collect([]);
         foreach ($sorted as $env) {
-            if (version_compare($env->version, '4.0.0-beta.347', '<=')) {
-                $commands[] = "echo '{$env->key}={$env->real_value}' >> .env";
-            } else {
-                $real_value = $env->real_value;
-                if ($env->version === '4.0.0-beta.239') {
-                    $real_value = $env->real_value;
-                } else {
-                    if ($env->is_literal || $env->is_multiline) {
-                        $real_value = '\''.$real_value.'\'';
-                    } else {
-                        $real_value = escapeEnvVariables($env->real_value);
-                    }
-                }
-                $commands[] = "echo \"{$env->key}={$real_value}\" >> .env";
-            }
+            $envs->push("{$env->key}={$env->real_value}");
         }
-        if ($sorted->count() === 0) {
+        if ($envs->count() === 0) {
             $commands[] = 'touch .env';
+        } else {
+            $envs_content = $envs->implode("\n");
+            transfer_file_to_server($envs_content, $this->workdir().'/.env', $this->server);
+
+            return;
         }
+
         instant_remote_process($commands, $this->server);
     }
 
     public function parse(bool $isNew = false): Collection
     {
         if ((int) $this->compose_parsing_version >= 3) {
-            return newParser($this);
+            return serviceParser($this);
         } elseif ($this->docker_compose_raw) {
             return parseDockerComposeFile($this, $isNew);
         } else {

@@ -12,6 +12,12 @@ class EditDomain extends Component
 
     public ServiceApplication $application;
 
+    public $domainConflicts = [];
+
+    public $showDomainConflictModal = false;
+
+    public $forceSaveDomains = false;
+
     protected $rules = [
         'application.fqdn' => 'nullable',
         'application.required_fqdn' => 'required|boolean',
@@ -22,29 +28,44 @@ class EditDomain extends Component
         $this->application = ServiceApplication::find($this->applicationId);
     }
 
+    public function confirmDomainUsage()
+    {
+        $this->forceSaveDomains = true;
+        $this->showDomainConflictModal = false;
+        $this->submit();
+    }
+
     public function submit()
     {
         try {
-            $this->application->fqdn = str($this->application->fqdn)->replaceEnd(',', '')->trim();
-            $this->application->fqdn = str($this->application->fqdn)->replaceStart(',', '')->trim();
-            $this->application->fqdn = str($this->application->fqdn)->trim()->explode(',')->map(function ($domain) {
+            $this->application->fqdn = str(sanitizeFqdn($this->application->fqdn))->explode(',')->map(function ($domain) {
                 Url::fromString($domain, ['http', 'https']);
 
                 return str($domain)->trim()->lower();
-            });
-            $this->application->fqdn = $this->application->fqdn->unique()->implode(',');
+            })->unique()->implode(',');
             $warning = sslipDomainWarning($this->application->fqdn);
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));
             }
-            check_domain_usage(resource: $this->application);
+            // Check for domain conflicts if not forcing save
+            if (! $this->forceSaveDomains) {
+                $result = checkDomainUsage(resource: $this->application);
+                if ($result['hasConflicts']) {
+                    $this->domainConflicts = $result['conflicts'];
+                    $this->showDomainConflictModal = true;
+
+                    return;
+                }
+            } else {
+                // Reset the force flag after using it
+                $this->forceSaveDomains = false;
+            }
+
             $this->validate();
             $this->application->save();
             updateCompose($this->application);
             if (str($this->application->fqdn)->contains(',')) {
                 $this->dispatch('warning', 'Some services do not support multiple domains, which can lead to problems and is NOT RECOMMENDED.<br><br>Only use multiple domains if you know what you are doing.');
-            } else {
-                ! $warning && $this->dispatch('success', 'Service saved.');
             }
             $this->application->service->parse();
             $this->dispatch('refresh');

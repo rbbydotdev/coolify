@@ -4,15 +4,17 @@
     </x-slot>
     <form wire:submit='submit' class="flex flex-col">
         <div class="flex items-end gap-2">
-            <h1>Environment: {{ data_get($environment, 'name') }}</h1>
-            <x-forms.button type="submit">Save</x-forms.button>
-            <livewire:project.delete-environment :disabled="!$environment->isEmpty()" :environment_id="$environment->id" />
+            <h1>Environment: {{ data_get_str($environment, 'name')->limit(15) }}</h1>
+            <x-forms.button canGate="update" :canResource="$environment" type="submit">Save</x-forms.button>
+            @can('delete', $environment)
+                <livewire:project.delete-environment :disabled="!$environment->isEmpty()" :environment_id="$environment->id" />
+            @endcan
         </div>
         <nav class="flex pt-2 pb-10">
             <ol class="flex flex-wrap items-center gap-y-1">
                 <li class="inline-flex items-center">
                     <div class="flex items-center">
-                        <a class="text-xs truncate lg:text-sm" wire:navigate
+                        <a class="text-xs truncate lg:text-sm"
                             href="{{ route('project.show', ['project_uuid' => $project->uuid]) }}">
                             {{ $project->name }}</a>
                         <svg aria-hidden="true" class="w-4 h-4 mx-1 font-bold dark:text-warning" fill="currentColor"
@@ -25,7 +27,7 @@
                 </li>
                 <li>
                     <div class="flex items-center">
-                        <a class="text-xs truncate lg:text-sm" wire:navigate
+                        <a class="text-xs truncate lg:text-sm"
                             href="{{ route('project.resource.index', ['environment_uuid' => $environment->uuid, 'project_uuid' => $project->uuid]) }}">
                             {{ $environment->name }}
                         </a>

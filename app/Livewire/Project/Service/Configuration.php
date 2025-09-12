@@ -2,13 +2,15 @@
 
 namespace App\Livewire\Project\Service;
 
-use App\Actions\Docker\GetContainersStatus;
 use App\Models\Service;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
 class Configuration extends Component
 {
+    use AuthorizesRequests;
+
     public $currentRoute;
 
     public $project;
@@ -27,12 +29,10 @@ class Configuration extends Component
 
     public function getListeners()
     {
-        $userId = Auth::id();
+        $teamId = Auth::user()->currentTeam()->id;
 
         return [
-            "echo-private:user.{$userId},ServiceStatusChanged" => 'check_status',
-            'check_status',
-            'refreshStatus' => '$refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'serviceChecked',
         ];
     }
 
@@ -43,22 +43,35 @@ class Configuration extends Component
 
     public function mount()
     {
-        $this->parameters = get_route_parameters();
-        $this->currentRoute = request()->route()->getName();
-        $this->query = request()->query();
-        $project = currentTeam()
-            ->projects()
-            ->select('id', 'uuid', 'team_id')
-            ->where('uuid', request()->route('project_uuid'))
-            ->firstOrFail();
-        $environment = $project->environments()
-            ->select('id', 'uuid', 'name', 'project_id')
-            ->where('uuid', request()->route('environment_uuid'))
-            ->firstOrFail();
-        $this->service = $environment->services()->whereUuid(request()->route('service_uuid'))->firstOrFail();
+        try {
+            $this->parameters = get_route_parameters();
+            $this->currentRoute = request()->route()->getName();
+            $this->query = request()->query();
+            $project = currentTeam()
+                ->projects()
+                ->select('id', 'uuid', 'team_id')
+                ->where('uuid', request()->route('project_uuid'))
+                ->firstOrFail();
+            $environment = $project->environments()
+                ->select('id', 'uuid', 'name', 'project_id')
+                ->where('uuid', request()->route('environment_uuid'))
+                ->firstOrFail();
+            $this->service = $environment->services()->whereUuid(request()->route('service_uuid'))->firstOrFail();
 
-        $this->project = $project;
-        $this->environment = $environment;
+            $this->authorize('view', $this->service);
+
+            $this->project = $project;
+            $this->environment = $environment;
+            $this->applications = $this->service->applications->sort();
+            $this->databases = $this->service->databases->sort();
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function refreshServices()
+    {
+        $this->service->refresh();
         $this->applications = $this->service->applications->sort();
         $this->databases = $this->service->databases->sort();
     }
@@ -66,6 +79,7 @@ class Configuration extends Component
     public function restartApplication($id)
     {
         try {
+            $this->authorize('update', $this->service);
             $application = $this->service->applications->find($id);
             if ($application) {
                 $application->restart();
@@ -79,6 +93,7 @@ class Configuration extends Component
     public function restartDatabase($id)
     {
         try {
+            $this->authorize('update', $this->service);
             $database = $this->service->databases->find($id);
             if ($database) {
                 $database->restart();
@@ -89,19 +104,15 @@ class Configuration extends Component
         }
     }
 
-    public function check_status()
+    public function serviceChecked()
     {
         try {
-            if ($this->service->server->isFunctional()) {
-                GetContainersStatus::dispatch($this->service->server);
-            }
             $this->service->applications->each(function ($application) {
                 $application->refresh();
             });
             $this->service->databases->each(function ($database) {
                 $database->refresh();
             });
-            $this->dispatch('refreshStatus');
         } catch (\Exception $e) {
             return handleError($e, $this);
         }

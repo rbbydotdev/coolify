@@ -68,13 +68,13 @@ CMD ["nginx", "-g", "daemon off;"]
             'source_type' => GithubApp::class,
         ]);
 
-        $fqdn = generateFqdn($destination->server, $application->uuid);
+        $fqdn = generateUrl(server: $destination->server, random: $application->uuid);
         $application->update([
             'name' => 'dockerfile-'.$application->uuid,
             'fqdn' => $fqdn,
         ]);
 
-        $application->parseHealthcheckFromDockerfile(dockerfile: collect(str($this->dockerfile)->trim()->explode("\n")), isInit: true);
+        $application->parseHealthcheckFromDockerfile(dockerfile: $this->dockerfile, isInit: true);
 
         return redirect()->route('project.application.configuration', [
             'application_uuid' => $application->uuid,

@@ -5,6 +5,7 @@ namespace App\Livewire\Source\Github;
 use App\Jobs\GithubAppPermissionJob;
 use App\Models\GithubApp;
 use App\Models\PrivateKey;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Http;
 use Lcobucci\JWT\Configuration;
 use Lcobucci\JWT\Signer\Key\InMemory;
@@ -13,7 +14,9 @@ use Livewire\Component;
 
 class Change extends Component
 {
-    public string $webhook_endpoint;
+    use AuthorizesRequests;
+
+    public string $webhook_endpoint = '';
 
     public ?string $ipv4 = null;
 
@@ -37,6 +40,8 @@ class Change extends Component
 
     public $applications;
 
+    public $privateKeys;
+
     protected $rules = [
         'github_app.name' => 'required|string',
         'github_app.organization' => 'nullable|string',
@@ -54,6 +59,7 @@ class Change extends Component
         'github_app.metadata' => 'nullable|string',
         'github_app.pull_requests' => 'nullable|string',
         'github_app.administration' => 'nullable|string',
+        'github_app.private_key_id' => 'required|int',
     ];
 
     public function boot()
@@ -65,9 +71,15 @@ class Change extends Component
 
     public function checkPermissions()
     {
-        GithubAppPermissionJob::dispatchSync($this->github_app);
-        $this->github_app->refresh()->makeVisible('client_secret')->makeVisible('webhook_secret');
-        $this->dispatch('success', 'Github App permissions updated.');
+        try {
+            $this->authorize('view', $this->github_app);
+
+            GithubAppPermissionJob::dispatchSync($this->github_app);
+            $this->github_app->refresh()->makeVisible('client_secret')->makeVisible('webhook_secret');
+            $this->dispatch('success', 'Github App permissions updated.');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     // public function check()
@@ -109,6 +121,7 @@ class Change extends Component
             $github_app_uuid = request()->github_app_uuid;
             $this->github_app = GithubApp::ownedByCurrentTeam()->whereUuid($github_app_uuid)->firstOrFail();
             $this->github_app->makeVisible(['client_secret', 'webhook_secret']);
+            $this->privateKeys = PrivateKey::ownedByCurrentTeam()->get();
 
             $this->applications = $this->github_app->applications;
             $settings = instanceSettings();
@@ -147,7 +160,7 @@ class Change extends Component
             if (isCloud() && ! isDev()) {
                 $this->webhook_endpoint = config('app.url');
             } else {
-                $this->webhook_endpoint = $this->ipv4;
+                $this->webhook_endpoint = $this->ipv4 ?? '';
                 $this->is_system_wide = $this->github_app->is_system_wide;
             }
         } catch (\Throwable $e) {
@@ -187,6 +200,8 @@ class Change extends Component
     public function updateGithubAppName()
     {
         try {
+            $this->authorize('update', $this->github_app);
+
             $privateKey = PrivateKey::ownedByCurrentTeam()->find($this->github_app->private_key_id);
 
             if (! $privateKey) {
@@ -229,6 +244,8 @@ class Change extends Component
     public function submit()
     {
         try {
+            $this->authorize('update', $this->github_app);
+
             $this->github_app->makeVisible('client_secret')->makeVisible('webhook_secret');
             $this->validate([
                 'github_app.name' => 'required|string',
@@ -243,6 +260,7 @@ class Change extends Component
                 'github_app.client_secret' => 'required|string',
                 'github_app.webhook_secret' => 'required|string',
                 'github_app.is_system_wide' => 'required|bool',
+                'github_app.private_key_id' => 'required|int',
             ]);
             $this->github_app->save();
             $this->dispatch('success', 'Github App updated.');
@@ -251,9 +269,22 @@ class Change extends Component
         }
     }
 
+    public function createGithubAppManually()
+    {
+        $this->authorize('update', $this->github_app);
+
+        $this->github_app->makeVisible('client_secret')->makeVisible('webhook_secret');
+        $this->github_app->app_id = '1234567890';
+        $this->github_app->installation_id = '1234567890';
+        $this->github_app->save();
+        $this->dispatch('success', 'Github App updated.');
+    }
+
     public function instantSave()
     {
         try {
+            $this->authorize('update', $this->github_app);
+
             $this->github_app->makeVisible('client_secret')->makeVisible('webhook_secret');
             $this->github_app->save();
             $this->dispatch('success', 'Github App updated.');
@@ -265,6 +296,8 @@ class Change extends Component
     public function delete()
     {
         try {
+            $this->authorize('delete', $this->github_app);
+
             if ($this->github_app->applications->isNotEmpty()) {
                 $this->dispatch('error', 'This source is being used by an application. Please delete all applications first.');
                 $this->github_app->makeVisible('client_secret')->makeVisible('webhook_secret');

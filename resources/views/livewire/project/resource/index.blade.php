@@ -6,25 +6,33 @@
         <div class="flex items-center gap-2">
             <h1>Resources</h1>
             @if ($environment->isEmpty())
-                <a class="button" wire:navigate
-                    href="{{ route('project.clone-me', ['project_uuid' => data_get($project, 'uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}">
-                    Clone
-                </a>
+                @can('createAnyResource')
+                    <a class="button"
+                        href="{{ route('project.clone-me', ['project_uuid' => data_get($project, 'uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}">
+                        Clone
+                    </a>
+                @endcan
             @else
-                <a href="{{ route('project.resource.create', ['project_uuid' => data_get($parameters, 'project_uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}"
-                    wire:navigate class="button">+
-                    New</a>
-                <a class="button" wire:navigate
-                    href="{{ route('project.clone-me', ['project_uuid' => data_get($project, 'uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}">
-                    Clone
-                </a>
+                @can('createAnyResource')
+                    <a href="{{ route('project.resource.create', ['project_uuid' => data_get($parameters, 'project_uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}"
+                        class="button">+
+                        New</a>
+                @endcan
+                @can('createAnyResource')
+                    <a class="button"
+                        href="{{ route('project.clone-me', ['project_uuid' => data_get($project, 'uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}">
+                        Clone
+                    </a>
+                @endcan
             @endif
-            <livewire:project.delete-environment :disabled="!$environment->isEmpty()" :environment_id="$environment->id" />
+            @can('delete', $environment)
+                <livewire:project.delete-environment :disabled="!$environment->isEmpty()" :environment_id="$environment->id" />
+            @endcan
         </div>
         <nav class="flex pt-2 pb-6">
             <ol class="flex items-center">
                 <li class="inline-flex items-center">
-                    <a class="text-xs truncate lg:text-sm" wire:navigate
+                    <a class="text-xs truncate lg:text-sm"
                         href="{{ route('project.show', ['project_uuid' => data_get($parameters, 'project_uuid')]) }}">
                         {{ $project->name }}</a>
                 </li>
@@ -44,14 +52,39 @@
         </nav>
     </div>
     @if ($environment->isEmpty())
-        <a wire:navigate href="{{ route('project.resource.create', ['project_uuid' => data_get($parameters, 'project_uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}"
-            class="items-center justify-center box">+ Add New Resource</a>
+        @can('createAnyResource')
+            <a href="{{ route('project.resource.create', ['project_uuid' => data_get($parameters, 'project_uuid'), 'environment_uuid' => data_get($environment, 'uuid')]) }}"
+                class="items-center justify-center box">+ Add Resource</a>
+        @else
+            <div
+                class="flex flex-col items-center justify-center p-8 text-center border border-dashed border-neutral-300 dark:border-coolgray-300 rounded-lg">
+                <h3 class="mb-2 text-lg font-semibold text-neutral-600 dark:text-neutral-400">No Resources Found</h3>
+                <p class="text-sm text-neutral-600 dark:text-neutral-400">
+                    This environment doesn't have any resources yet.<br>
+                    Contact your team administrator to add resources.
+                </p>
+            </div>
+        @endcan
     @else
         <div x-data="searchComponent()">
             <x-forms.input placeholder="Search for name, fqdn..." x-model="search" id="null" />
             <template
                 x-if="filteredApplications.length === 0 && filteredDatabases.length === 0 && filteredServices.length === 0">
-                <div>No resource found with the search term "<span x-text="search"></span>".</div>
+                <div class="flex flex-col items-center justify-center p-8 text-center">
+                    <div x-show="search.length > 0">
+                        <p class="text-neutral-600 dark:text-neutral-400">No resource found with the search term "<span
+                                class="font-semibold" x-text="search"></span>".</p>
+                        <p class="text-sm text-neutral-500 dark:text-neutral-500 mt-1">Try adjusting your search
+                            criteria.</p>
+                    </div>
+                    <div x-show="search.length === 0">
+                        <p class="text-neutral-600 dark:text-neutral-400">No resources found in this environment.</p>
+                        @cannot('createAnyResource')
+                            <p class="text-sm text-neutral-500 dark:text-neutral-500 mt-1">Contact your team administrator
+                                to add resources.</p>
+                        @endcannot
+                    </div>
+                </div>
             </template>
 
             <template x-if="filteredApplications.length > 0">
@@ -61,22 +94,25 @@
                 class="grid grid-cols-1 gap-4 pt-4 lg:grid-cols-2 xl:grid-cols-3">
                 <template x-for="item in filteredApplications" :key="item.uuid">
                     <span>
-                        <a class="h-24 box group" wire:navigate :href="item.hrefLink">
+                        <a class="h-24 box group" :href="item.hrefLink">
                             <div class="flex flex-col w-full">
                                 <div class="flex gap-2 px-4">
                                     <div class="pb-2 truncate box-title" x-text="item.name"></div>
                                     <div class="flex-1"></div>
                                     <template x-if="item.status.startsWith('running')">
-                                        <div title="running" class="bg-success badge badge-absolute"></div>
+                                        <div title="running" class="bg-success badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('exited')">
-                                        <div title="exited" class="bg-error badge badge-absolute"></div>
+                                        <div title="exited" class="bg-error badge-dashboard"></div>
+                                    </template>
+                                    <template x-if="item.status.startsWith('starting')">
+                                        <div title="starting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('restarting')">
-                                        <div title="restarting" class="bg-warning badge badge-absolute"></div>
+                                        <div title="restarting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('degraded')">
-                                        <div title="degraded" class="bg-warning badge badge-absolute"></div>
+                                        <div title="degraded" class="bg-warning badge-dashboard"></div>
                                     </template>
                                 </div>
                                 <div class="max-w-full px-4 truncate box-description" x-text="item.description"></div>
@@ -88,17 +124,12 @@
                             </div>
                         </a>
                         <div
-                            class="flex flex-wrap gap-1 pt-1 group-hover:dark:text-white group-hover:text-black group min-h-6">
+                            class="flex flex-wrap gap-1 pt-1 dark:group-hover:text-white group-hover:text-black group min-h-6">
                             <template x-for="tag in item.tags">
-                                <a :href="`/tags/${tag.name}`" 
-                                   wire:navigate 
-                                   class="tag" 
-                                   x-text="tag.name">
+                                <a :href="`/tags/${tag.name}`" class="tag" x-text="tag.name">
                                 </a>
                             </template>
-                            <a :href="`${item.hrefLink}/tags`" 
-                               wire:navigate 
-                               class="add-tag">
+                            <a :href="`${item.hrefLink}/tags`" class="add-tag">
                                 Add tag
                             </a>
                         </div>
@@ -112,22 +143,25 @@
                 class="grid grid-cols-1 gap-4 pt-4 lg:grid-cols-2 xl:grid-cols-3">
                 <template x-for="item in filteredDatabases" :key="item.uuid">
                     <span>
-                        <a class="h-24 box group" wire:navigate :href="item.hrefLink">
+                        <a class="h-24 box group" :href="item.hrefLink">
                             <div class="flex flex-col w-full">
                                 <div class="flex gap-2 px-4">
                                     <div class="pb-2 truncate box-title" x-text="item.name"></div>
                                     <div class="flex-1"></div>
                                     <template x-if="item.status.startsWith('running')">
-                                        <div title="running" class="bg-success badge badge-absolute"></div>
+                                        <div title="running" class="bg-success badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('exited')">
-                                        <div title="exited" class="bg-error badge badge-absolute"></div>
+                                        <div title="exited" class="bg-error badge-dashboard"></div>
+                                    </template>
+                                    <template x-if="item.status.startsWith('starting')">
+                                        <div title="starting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('restarting')">
-                                        <div title="restarting" class="bg-warning badge badge-absolute"></div>
+                                        <div title="restarting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('degraded')">
-                                        <div title="degraded" class="bg-warning badge badge-absolute"></div>
+                                        <div title="degraded" class="bg-warning badge-dashboard"></div>
                                     </template>
                                 </div>
                                 <div class="max-w-full px-4 truncate box-description" x-text="item.description"></div>
@@ -139,17 +173,12 @@
                             </div>
                         </a>
                         <div
-                            class="flex flex-wrap gap-1 pt-1 group-hover:dark:text-white group-hover:text-black group min-h-6">
+                            class="flex flex-wrap gap-1 pt-1 dark:group-hover:text-white group-hover:text-black group min-h-6">
                             <template x-for="tag in item.tags">
-                                <a :href="`/tags/${tag.name}`" 
-                                   wire:navigate 
-                                   class="tag" 
-                                   x-text="tag.name">
+                                <a :href="`/tags/${tag.name}`" class="tag" x-text="tag.name">
                                 </a>
                             </template>
-                            <a :href="`${item.hrefLink}/tags`" 
-                               wire:navigate 
-                               class="add-tag">
+                            <a :href="`${item.hrefLink}/tags`" class="add-tag">
                                 Add tag
                             </a>
                         </div>
@@ -163,22 +192,25 @@
                 class="grid grid-cols-1 gap-4 pt-4 lg:grid-cols-2 xl:grid-cols-3">
                 <template x-for="item in filteredServices" :key="item.uuid">
                     <span>
-                        <a class="h-24 box group" wire:navigate :href="item.hrefLink">
+                        <a class="h-24 box group" :href="item.hrefLink">
                             <div class="flex flex-col w-full">
                                 <div class="flex gap-2 px-4">
                                     <div class="pb-2 truncate box-title" x-text="item.name"></div>
                                     <div class="flex-1"></div>
                                     <template x-if="item.status.startsWith('running')">
-                                        <div title="running" class="bg-success badge badge-absolute"></div>
+                                        <div title="running" class="bg-success badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('exited')">
-                                        <div title="exited" class="bg-error badge badge-absolute"></div>
+                                        <div title="exited" class="bg-error badge-dashboard"></div>
+                                    </template>
+                                    <template x-if="item.status.startsWith('starting')">
+                                        <div title="starting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('restarting')">
-                                        <div title="restarting" class="bg-warning badge badge-absolute"></div>
+                                        <div title="restarting" class="bg-warning badge-dashboard"></div>
                                     </template>
                                     <template x-if="item.status.startsWith('degraded')">
-                                        <div title="degraded" class="bg-warning badge badge-absolute"></div>
+                                        <div title="degraded" class="bg-warning badge-dashboard"></div>
                                     </template>
                                 </div>
                                 <div class="max-w-full px-4 truncate box-description" x-text="item.description"></div>
@@ -190,17 +222,12 @@
                             </div>
                         </a>
                         <div
-                            class="flex flex-wrap gap-1 pt-1 group-hover:dark:text-white group-hover:text-black group min-h-6">
+                            class="flex flex-wrap gap-1 pt-1 dark:group-hover:text-white group-hover:text-black group min-h-6">
                             <template x-for="tag in item.tags">
-                                <a :href="`/tags/${tag.name}`" 
-                                   wire:navigate 
-                                   class="tag" 
-                                   x-text="tag.name">
+                                <a :href="`/tags/${tag.name}`" class="tag" x-text="tag.name">
                                 </a>
                             </template>
-                            <a :href="`${item.hrefLink}/tags`" 
-                               wire:navigate 
-                               class="add-tag">
+                            <a :href="`${item.hrefLink}/tags`" class="add-tag">
                                 Add tag
                             </a>
                         </div>

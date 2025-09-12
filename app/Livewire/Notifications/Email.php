@@ -5,6 +5,7 @@ namespace App\Livewire\Notifications;
 use App\Models\EmailNotificationSettings;
 use App\Models\Team;
 use App\Notifications\Test;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\Validate;
@@ -12,6 +13,8 @@ use Livewire\Component;
 
 class Email extends Component
 {
+    use AuthorizesRequests;
+
     protected $listeners = ['refresh' => '$refresh'];
 
     #[Locked]
@@ -98,6 +101,9 @@ class Email extends Component
     #[Validate(['boolean'])]
     public bool $serverUnreachableEmailNotifications = true;
 
+    #[Validate(['boolean'])]
+    public bool $serverPatchEmailNotifications = false;
+
     #[Validate(['nullable', 'email'])]
     public ?string $testEmailAddress = null;
 
@@ -107,6 +113,7 @@ class Email extends Component
             $this->team = auth()->user()->currentTeam();
             $this->emails = auth()->user()->email;
             $this->settings = $this->team->emailNotificationSettings;
+            $this->authorize('view', $this->settings);
             $this->syncData();
             $this->testEmailAddress = auth()->user()->email;
         } catch (\Throwable $e) {
@@ -118,6 +125,7 @@ class Email extends Component
     {
         if ($toModel) {
             $this->validate();
+            $this->authorize('update', $this->settings);
             $this->settings->smtp_enabled = $this->smtpEnabled;
             $this->settings->smtp_from_address = $this->smtpFromAddress;
             $this->settings->smtp_from_name = $this->smtpFromName;
@@ -146,6 +154,7 @@ class Email extends Component
             $this->settings->server_disk_usage_email_notifications = $this->serverDiskUsageEmailNotifications;
             $this->settings->server_reachable_email_notifications = $this->serverReachableEmailNotifications;
             $this->settings->server_unreachable_email_notifications = $this->serverUnreachableEmailNotifications;
+            $this->settings->server_patch_email_notifications = $this->serverPatchEmailNotifications;
             $this->settings->save();
 
         } else {
@@ -177,6 +186,7 @@ class Email extends Component
             $this->serverDiskUsageEmailNotifications = $this->settings->server_disk_usage_email_notifications;
             $this->serverReachableEmailNotifications = $this->settings->server_reachable_email_notifications;
             $this->serverUnreachableEmailNotifications = $this->settings->server_unreachable_email_notifications;
+            $this->serverPatchEmailNotifications = $this->settings->server_patch_email_notifications;
         }
     }
 
@@ -249,10 +259,9 @@ class Email extends Component
                 'smtpEncryption.required' => 'Encryption type is required.',
             ]);
 
-            $this->settings->resend_enabled = false;
-            $this->settings->use_instance_email_settings = false;
-            $this->resendEnabled = false;
-            $this->useInstanceEmailSettings = false;
+            if ($this->smtpEnabled) {
+                $this->settings->resend_enabled = $this->resendEnabled = false;
+            }
 
             $this->settings->smtp_enabled = $this->smtpEnabled;
             $this->settings->smtp_from_address = $this->smtpFromAddress;
@@ -269,7 +278,7 @@ class Email extends Component
         } catch (\Throwable $e) {
             $this->smtpEnabled = false;
 
-            return handleError($e);
+            return handleError($e, $this);
         }
     }
 
@@ -288,11 +297,9 @@ class Email extends Component
                 'smtpFromAddress.email' => 'Please enter a valid email address.',
                 'smtpFromName.required' => 'From Name is required.',
             ]);
-
-            $this->settings->smtp_enabled = false;
-            $this->settings->use_instance_email_settings = false;
-            $this->smtpEnabled = false;
-            $this->useInstanceEmailSettings = false;
+            if ($this->resendEnabled) {
+                $this->settings->smtp_enabled = $this->smtpEnabled = false;
+            }
 
             $this->settings->resend_enabled = $this->resendEnabled;
             $this->settings->resend_api_key = $this->resendApiKey;
@@ -309,6 +316,7 @@ class Email extends Component
     public function sendTestEmail()
     {
         try {
+            $this->authorize('sendTest', $this->settings);
             $this->validate([
                 'testEmailAddress' => 'required|email',
             ], [
@@ -320,7 +328,7 @@ class Email extends Component
                 'test-email:'.$this->team->id,
                 $perMinute = 0,
                 function () {
-                    $this->team?->notify(new Test($this->testEmailAddress, 'email'));
+                    $this->team?->notifyNow(new Test($this->testEmailAddress, 'email'));
                     $this->dispatch('success', 'Test Email sent.');
                 },
                 $decaySeconds = 10,
@@ -336,33 +344,31 @@ class Email extends Component
 
     public function copyFromInstanceSettings()
     {
+        $this->authorize('update', $this->settings);
         $settings = instanceSettings();
+        $this->smtpFromAddress = $settings->smtp_from_address;
+        $this->smtpFromName = $settings->smtp_from_name;
 
         if ($settings->smtp_enabled) {
             $this->smtpEnabled = true;
-            $this->smtpFromAddress = $settings->smtp_from_address;
-            $this->smtpFromName = $settings->smtp_from_name;
-            $this->smtpRecipients = $settings->smtp_recipients;
-            $this->smtpHost = $settings->smtp_host;
-            $this->smtpPort = $settings->smtp_port;
-            $this->smtpEncryption = $settings->smtp_encryption;
-            $this->smtpUsername = $settings->smtp_username;
-            $this->smtpPassword = $settings->smtp_password;
-            $this->smtpTimeout = $settings->smtp_timeout;
             $this->resendEnabled = false;
-            $this->saveModel();
-
-            return;
         }
+
+        $this->smtpRecipients = $settings->smtp_recipients;
+        $this->smtpHost = $settings->smtp_host;
+        $this->smtpPort = $settings->smtp_port;
+        $this->smtpEncryption = $settings->smtp_encryption;
+        $this->smtpUsername = $settings->smtp_username;
+        $this->smtpPassword = $settings->smtp_password;
+        $this->smtpTimeout = $settings->smtp_timeout;
+
         if ($settings->resend_enabled) {
             $this->resendEnabled = true;
-            $this->resendApiKey = $settings->resend_api_key;
             $this->smtpEnabled = false;
-            $this->saveModel();
-
-            return;
         }
-        $this->dispatch('error', 'Instance SMTP/Resend settings are not enabled.');
+        $this->resendApiKey = $settings->resend_api_key;
+        $this->saveModel();
+
     }
 
     public function render()

@@ -4,11 +4,14 @@ namespace App\Livewire\Server\Proxy;
 
 use App\Enums\ProxyTypes;
 use App\Models\Server;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
 use Symfony\Component\Yaml\Yaml;
 
 class NewDynamicConfiguration extends Component
 {
+    use AuthorizesRequests;
+
     public string $fileName = '';
 
     public string $value = '';
@@ -23,6 +26,7 @@ class NewDynamicConfiguration extends Component
 
     public function mount()
     {
+        $this->server = Server::ownedByCurrentTeam()->whereId($this->server_id)->first();
         $this->parameters = get_route_parameters();
         if ($this->fileName !== '') {
             $this->fileName = str_replace('|', '.', $this->fileName);
@@ -32,6 +36,7 @@ class NewDynamicConfiguration extends Component
     public function addDynamicConfiguration()
     {
         try {
+            $this->authorize('update', $this->server);
             $this->validate([
                 'fileName' => 'required',
                 'value' => 'required',
@@ -39,9 +44,7 @@ class NewDynamicConfiguration extends Component
             if (data_get($this->parameters, 'server_uuid')) {
                 $this->server = Server::ownedByCurrentTeam()->whereUuid(data_get($this->parameters, 'server_uuid'))->first();
             }
-            if (! is_null($this->server_id)) {
-                $this->server = Server::ownedByCurrentTeam()->whereId($this->server_id)->first();
-            }
+
             if (is_null($this->server)) {
                 return redirect()->route('server.index');
             }
@@ -75,10 +78,7 @@ class NewDynamicConfiguration extends Component
                 $yaml = Yaml::dump($yaml, 10, 2);
                 $this->value = $yaml;
             }
-            $base64_value = base64_encode($this->value);
-            instant_remote_process([
-                "echo '{$base64_value}' | base64 -d | tee {$file} > /dev/null",
-            ], $this->server);
+            transfer_file_to_server($this->value, $file, $this->server);
             if ($proxy_type === 'CADDY') {
                 $this->server->reloadCaddy();
             }

@@ -15,18 +15,17 @@ class StartLogDrain
     {
         if ($server->settings->is_logdrain_newrelic_enabled) {
             $type = 'newrelic';
-            StopLogDrain::run($server);
         } elseif ($server->settings->is_logdrain_highlight_enabled) {
             $type = 'highlight';
-            StopLogDrain::run($server);
         } elseif ($server->settings->is_logdrain_axiom_enabled) {
             $type = 'axiom';
-            StopLogDrain::run($server);
         } elseif ($server->settings->is_logdrain_custom_enabled) {
             $type = 'custom';
-            StopLogDrain::run($server);
         } else {
             $type = 'none';
+        }
+        if ($type !== 'none') {
+            StopLogDrain::run($server);
         }
         try {
             if ($type === 'none') {
@@ -181,12 +180,31 @@ Files:
             $command = [
                 "echo 'Saving configuration'",
                 "mkdir -p $config_path",
-                "echo '{$parsers}' | base64 -d | tee $parsers_config > /dev/null",
-                "echo '{$config}' | base64 -d | tee $fluent_bit_config > /dev/null",
-                "echo '{$compose}' | base64 -d | tee $compose_path > /dev/null",
-                "echo '{$readme}' | base64 -d | tee $readme_path > /dev/null",
+                [
+                    'transfer_file' => [
+                        'content' => base64_decode($parsers),
+                        'destination' => $parsers_config,
+                    ],
+                ],
+                [
+                    'transfer_file' => [
+                        'content' => base64_decode($config),
+                        'destination' => $fluent_bit_config,
+                    ],
+                ],
+                [
+                    'transfer_file' => [
+                        'content' => base64_decode($compose),
+                        'destination' => $compose_path,
+                    ],
+                ],
+                [
+                    'transfer_file' => [
+                        'content' => base64_decode($readme),
+                        'destination' => $readme_path,
+                    ],
+                ],
                 "test -f $config_path/.env && rm $config_path/.env",
-
             ];
             if ($type === 'newrelic') {
                 $add_envs_command = [

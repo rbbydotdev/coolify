@@ -16,9 +16,11 @@
                     volume
                     name, example: <span class='text-helper'>-pr-1</span>" />
             @if ($resource?->build_pack !== 'dockercompose')
-                <x-modal-input :closeOutside="false" buttonTitle="+ Add" title="New Persistent Storage" minWidth="64rem">
-                    <livewire:project.shared.storages.add :resource="$resource" />
-                </x-modal-input>
+                @can('update', $resource)
+                    <x-modal-input :closeOutside="false" buttonTitle="+ Add" title="New Persistent Storage" minWidth="64rem">
+                        <livewire:project.shared.storages.add :resource="$resource" />
+                    </x-modal-input>
+                @endcan
             @endif
         </div>
         <div class="pb-4">Persistent storage to preserve data between deployments.</div>
@@ -37,9 +39,8 @@
         @endif
         @if ($fileStorage->count() > 0)
             <div class="flex flex-col gap-2">
-                @foreach ($fileStorage->sort() as $fileStorage)
-                    <livewire:project.service.file-storage :fileStorage="$fileStorage"
-                        wire:key="resource-{{ $fileStorage->uuid }}" />
+                @foreach ($fileStorage as $fs)
+                    <livewire:project.service.file-storage :fileStorage="$fs" wire:key="resource-{{ $fs->uuid }}" />
                 @endforeach
             </div>
         @endif

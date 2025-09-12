@@ -2,88 +2,112 @@
 
 namespace App\Notifications\Channels;
 
+use App\Exceptions\NonReportableException;
+use App\Models\Team;
 use Exception;
-use Illuminate\Mail\Message;
 use Illuminate\Notifications\Notification;
-use Illuminate\Support\Facades\Mail;
+use Resend;
 
 class EmailChannel
 {
+    public function __construct() {}
+
     public function send(SendsEmail $notifiable, Notification $notification): void
     {
         try {
-            $this->bootConfigs($notifiable);
-            $recipients = $notifiable->getRecipients($notification);
+            // Get team and validate membership before proceeding
+            $team = data_get($notifiable, 'id');
+            $members = Team::find($team)->members;
+
+            $useInstanceEmailSettings = $notifiable->emailNotificationSettings->use_instance_email_settings;
+            $isTransactionalEmail = data_get($notification, 'isTransactionalEmail', false);
+            $customEmails = data_get($notification, 'emails', null);
+
+            if ($useInstanceEmailSettings || $isTransactionalEmail) {
+                $settings = instanceSettings();
+            } else {
+                $settings = $notifiable->emailNotificationSettings;
+            }
+
+            $isResendEnabled = $settings->resend_enabled;
+            $isSmtpEnabled = $settings->smtp_enabled;
+
+            if ($customEmails) {
+                $recipients = [$customEmails];
+            } else {
+                $recipients = $notifiable->getRecipients();
+            }
+
+            // Validate team membership for all recipients
             if (count($recipients) === 0) {
                 throw new Exception('No email recipients found');
             }
 
+            foreach ($recipients as $recipient) {
+                // Check if the recipient is part of the team
+                if (! $members->contains('email', $recipient)) {
+                    $emailSettings = $notifiable->emailNotificationSettings;
+                    data_set($emailSettings, 'smtp_password', '********');
+                    data_set($emailSettings, 'resend_api_key', '********');
+                    send_internal_notification(sprintf(
+                        "Recipient is not part of the team: %s\nTeam: %s\nNotification: %s\nNotifiable: %s\nEmail Settings:\n%s",
+                        $recipient,
+                        $team,
+                        get_class($notification),
+                        get_class($notifiable),
+                        json_encode($emailSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+                    ));
+                    throw new Exception('Recipient is not part of the team');
+                }
+            }
+
             $mailMessage = $notification->toMail($notifiable);
-            Mail::send(
-                [],
-                [],
-                fn (Message $message) => $message
-                    ->to($recipients)
+
+            if ($isResendEnabled) {
+                $resend = Resend::client($settings->resend_api_key);
+                $from = "{$settings->smtp_from_name} <{$settings->smtp_from_address}>";
+                $resend->emails->send([
+                    'from' => $from,
+                    'to' => $recipients,
+                    'subject' => $mailMessage->subject,
+                    'html' => (string) $mailMessage->render(),
+                ]);
+            } elseif ($isSmtpEnabled) {
+                $encryption = match (strtolower($settings->smtp_encryption)) {
+                    'starttls' => null,
+                    'tls' => 'tls',
+                    'none' => null,
+                    default => null,
+                };
+
+                $transport = new \Symfony\Component\Mailer\Transport\Smtp\EsmtpTransport(
+                    $settings->smtp_host,
+                    $settings->smtp_port,
+                    $encryption
+                );
+                $transport->setUsername($settings->smtp_username ?? '');
+                $transport->setPassword($settings->smtp_password ?? '');
+
+                $mailer = new \Symfony\Component\Mailer\Mailer($transport);
+
+                $fromEmail = $settings->smtp_from_address ?? 'noreply@localhost';
+                $fromName = $settings->smtp_from_name ?? 'System';
+                $from = new \Symfony\Component\Mime\Address($fromEmail, $fromName);
+                $email = (new \Symfony\Component\Mime\Email)
+                    ->from($from)
+                    ->to(...$recipients)
                     ->subject($mailMessage->subject)
-                    ->html((string) $mailMessage->render())
-            );
-        } catch (Exception $e) {
-            $error = $e->getMessage();
-            if ($error === 'No email settings found.') {
-                throw $e;
+                    ->html((string) $mailMessage->render());
+
+                $mailer->send($email);
             }
-            $message = "EmailChannel error: {$e->getMessage()}. Failed to send email to:";
-            if (isset($recipients)) {
-                $message .= implode(', ', $recipients);
+        } catch (\Throwable $e) {
+            // Check if this is a Resend domain verification error on cloud instances
+            if (isCloud() && str_contains($e->getMessage(), 'domain is not verified')) {
+                // Throw as NonReportableException so it won't go to Sentry
+                throw NonReportableException::fromException($e);
             }
-            if (isset($mailMessage)) {
-                $message .= " with subject: {$mailMessage->subject}";
-            }
-            send_internal_notification($message);
             throw $e;
-        }
-    }
-
-    private function bootConfigs($notifiable): void
-    {
-        $emailSettings = $notifiable->emailNotificationSettings;
-
-        if ($emailSettings->use_instance_email_settings) {
-            $type = set_transanctional_email_settings();
-            if (blank($type)) {
-                throw new Exception('No email settings found.');
-            }
-            return;
-        }
-
-        config()->set('mail.from.address', $emailSettings->smtp_from_address ?? 'test@example.com');
-        config()->set('mail.from.name', $emailSettings->smtp_from_name ?? 'Test');
-
-        if ($emailSettings->resend_enabled) {
-            config()->set('mail.default', 'resend');
-            config()->set('resend.api_key', $emailSettings->resend_api_key);
-        }
-
-        if ($emailSettings->smtp_enabled) {
-            $encryption = match (strtolower($emailSettings->smtp_encryption)) {
-                'starttls' => null,
-                'tls' => 'tls',
-                'none' => null,
-                default => null,
-            };
-
-            config()->set('mail.default', 'smtp');
-            config()->set('mail.mailers.smtp', [
-                'transport' => 'smtp',
-                'host' => $emailSettings->smtp_host,
-                'port' => $emailSettings->smtp_port,
-                'encryption' => $encryption,
-                'username' => $emailSettings->smtp_username,
-                'password' => $emailSettings->smtp_password,
-                'timeout' => $emailSettings->smtp_timeout,
-                'local_domain' => null,
-                'auto_tls' => $emailSettings->smtp_encryption === 'none' ? '0' : '', // If encryption is "none", it will not try to upgrade to TLS via StartTLS to make sure it is unencrypted.
-            ]);
         }
     }
 }
